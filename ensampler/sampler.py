@@ -41,7 +41,7 @@ def swap_walkers(ensemble, logprob, beta_list):
 
 
 
-def sample_pt(flogprob, ensemble, cached_logprob, a=2.0, beta_list=[1.0], mpi_executor=None):
+def sample_pt(flogprob, ensemble, cached_logprob, a=2.0, beta_list=[1.0], executor=None):
     nwalkers=len(ensemble)
     nbetas=len(beta_list)
     nwalkers_per_betas=nwalkers//nbetas
@@ -66,11 +66,11 @@ def sample_pt(flogprob, ensemble, cached_logprob, a=2.0, beta_list=[1.0], mpi_ex
     proposed_pt=[propose_move(ensemble[i1], ensemble[i2], z) for ((i1, i2), z) in zip(pair_id, z_list)]
     #print(z_list)
     #print(proposed_pt)
-    if mpi_executor is None:
+    if executor is None:
         #new_logprob=np.array([ flogprob(pt) for pt in proposed_pt ])
         new_logprob=np.array(list(map(flogprob, proposed_pt)))
     else:
-        new_logprob=np.array(list(mpi_executor.map(flogprob, proposed_pt)))
+        new_logprob=np.array(list(executor.map(flogprob, proposed_pt)))
     delta_lp=new_logprob-np.array(cached_logprob)
     expanded_beta=np.repeat(beta_list, nwalkers_per_betas)
     q_list=np.exp((ndim-1)*np.log(z_list)+delta_lp*expanded_beta)
