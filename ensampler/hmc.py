@@ -91,9 +91,11 @@ def sample_pt_impl(flogprob, grad_logprob, q0_list, lp_list, last_grad_list, bet
     l_list=[l]*len(q0_list)
     result=list(fmap(sample_packed, zip(flogprob_beta, grad_beta, q0_list, lp_list, last_grad_list, l_list, sc1, expanded_beta_list)))
     #q0_proposed, lp_proposed, last_grad_proposed, accepted=[ [ x[i] for x in result] for i in range(4)]
+    accept_cnt=[0]*nbeta
     for i,(q0, lp, gp, accepted) in enumerate(result):
         ibeta=i//n_per_beta
         if accepted:
+            accept_cnt[ibeta]+=1
             q0_list[i]=q0
             lp_list[i]=lp
             last_grad_list[i]=gp
@@ -102,6 +104,12 @@ def sample_pt_impl(flogprob, grad_logprob, q0_list, lp_list, last_grad_list, bet
         else:
             if uniform() < sc.target_accept_ratio:
                 sc.epsilon[ibeta] /= (1.0 + sc.adj_param)
+    return accept_cnt
+
+def sample_pt(flogprob, grad_logprob, q0_list, lp_list, beta_list, l, sc: SamplerStatePt, executor=None):
+    fmap=map if executor is None else executor.map
+    last_grad_list=fmap(grad_logprob, q0_list)
+    return sample_pt_impl(flogprob, grad_logprob, q0_list, lp_list, last_grad_list, beta_list, l, sc, executor)
 
 def rosenbrock(x):
     return -np.sum(100 * (x[1:] - x[:-1] ** 2) ** 2 + (1 - x[:-1]) ** 2)
