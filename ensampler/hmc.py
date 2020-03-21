@@ -39,7 +39,11 @@ def sample(flogprob, grad_logprob, q0, lp, last_grad, l, sc: SamplerState, beta=
 
     h_q = HqBeta(grad_logprob, beta)
 
-    last_hq_q = -last_grad
+    last_hq_q = -last_grad*beta
+    #print(last_hq_q)
+    #last_hq_q = h_q(q)
+    #print(last_hq_q)
+
 
     for i in range(l):
         q, p, last_hq_q = leapfrog(q, p, last_hq_q, sc.epsilon, h_q, h_p)
@@ -48,10 +52,12 @@ def sample(flogprob, grad_logprob, q0, lp, last_grad, l, sc: SamplerState, beta=
     proposed_u = -flogprob(q)
     proposed_k = kinetic(p)
     accepted = False
-    if uniform() < np.exp((current_u - proposed_u)*beta + current_k - proposed_k):
+    dh=(current_u - proposed_u)*beta + current_k - proposed_k
+    #print("dh=",dh)
+    if uniform() < np.exp(dh):
         q0 = q
         lp = -proposed_u
-        last_grad = -last_hq_q
+        last_grad = -last_hq_q/beta
         accepted = True
         if uniform() < 1 - sc.target_accept_ratio:
             sc.epsilon *= 1.0 + sc.adj_param
@@ -137,7 +143,7 @@ def gaussian_g(x):
     return -x
 
 
-if __name__ == '__main__':
+if __name__ == '__main__1':
     from multiprocessing import Pool
     import sys
     pool=Pool()
@@ -161,3 +167,18 @@ if __name__ == '__main__':
             sc.freeze()
             of.write("{0} {1} {2} {3}\n".format(
                 x[0][0], x[0][1], x[8][0], x[8][1]))
+
+if __name__ == '__main__':
+    from multiprocessing import Pool
+    np.random.seed(1)
+    x = np.array([0., 0.])
+    lp = gaussian(x)
+    last_grad = gaussian_g(x)
+    sc = SamplerState(0.01, 0.9, 0.0000)
+
+    for i in range(0, 10):
+        x, lp, last_grad, accepted = sample(gaussian, gaussian_g,
+                            x, lp, last_grad,
+                            3, sc, beta=1
+                            )
+        print(accepted)
