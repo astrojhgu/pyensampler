@@ -21,13 +21,23 @@ class SamplerState:
         self.target_accept_ratio = target_accept_ratio
         self.adj_param = adj_param
 
+def h_p(p):
+    return p
 
-def sample(flogprob, grad_logprob, q0, lp, last_grad, l, sc: SamplerState):
+class HqBeta:
+    def __init__(self, lp_grad, beta):
+        self.lp_grad=lp_grad
+        self.beta=beta
+
+    def __call__(self, q):
+        return -self.beta*self.lp_grad(q)
+
+def sample(flogprob, grad_logprob, q0, lp, last_grad, l, sc: SamplerState, beta=1):
     p = normal(size=q0.shape)
     current_k = kinetic(p)
     q = q0
-    h_p = lambda p: p
-    h_q = lambda q: -grad_logprob(q)
+
+    h_q = HqBeta(grad_logprob, beta)
 
     last_hq_q = -last_grad
 
@@ -38,7 +48,7 @@ def sample(flogprob, grad_logprob, q0, lp, last_grad, l, sc: SamplerState):
     proposed_u = -flogprob(q)
     proposed_k = kinetic(p)
     accepted = False
-    if uniform() < np.exp(current_u - proposed_u + current_k - proposed_k):
+    if uniform() < np.exp((current_u - proposed_u)*beta + current_k - proposed_k):
         q0 = q
         lp = -proposed_u
         last_grad = -last_hq_q
@@ -50,42 +60,6 @@ def sample(flogprob, grad_logprob, q0, lp, last_grad, l, sc: SamplerState):
             sc.epsilon /= (1.0 + sc.adj_param)
 
     return (q0, lp, last_grad, accepted)
-
-
-class EvolveWrapper:
-    def __init__(self, p_list,
-                 q_list,last_hq_q_tmp,
-                 n_per_beta,grad_logprob,beta_list, epsilon, l):
-        self.p_list=p_list
-        self.q_list=q_list
-        self.last_hq_q_tmp=last_hq_q_tmp
-        self.n_per_beta=n_per_beta
-        self.grad_logprob=grad_logprob
-        self.l=l
-        self.beta_list=beta_list
-        self.epsilon=epsilon
-
-    def __call__(self, i):
-        p1 = self.p_list[i]
-        q1 = self.q_list[i]
-        hlqq = self.last_hq_q_tmp[i]
-        ibeta = i // self.n_per_beta
-        beta = self.beta_list[ibeta]
-        e = self.epsilon[ibeta]
-
-        def h_p(p):
-            return p
-
-        def h_q(q):
-            return self.grad_logprob(q) * (-beta)
-
-        for j in range(self.l):
-            q1, p1, hlqq = leapfrog(q1,
-                                    p1,
-                                    hlqq,
-                                    e, h_q, h_p)
-        return (q1, p1, hlqq)
-
 
 class SamplerStatePt:
     def __init__(self, epsilon, target_accept_ratio, adj_param, nbeta: int):
@@ -102,69 +76,32 @@ class SamplerStatePt:
     def slow(self):
         self.adj_param=0.001
 
-def sample_pt(flogprob, grad_logprob,
-              q0_list, lp_list,
-              beta_list, l, sc_list: SamplerStatePt,
-              executor = None):
-    map_func=map if executor is None else executor.map
-    last_grad = list(map_func(gaussian_g, q0_list))
-    return sample_pt_impl(flogprob, grad_logprob,
-                   q0_list, lp_list, last_grad,
-                   beta_list, l, sc_list, executor)
 
-def sample_pt_impl(flogprob, grad_logprob,
-                   q0_list, lp_list,
-                   last_grad_list, beta_list,
-                   l, sc_list: SamplerStatePt,
-                   executor=None):
-    nbeta = len(beta_list)
-    accept_cnt = [0] * nbeta
-    n_per_beta = len(q0_list) // nbeta
-    assert (len(q0_list) == len(lp_list))
-    assert (len(q0_list) == len(last_grad_list))
-    assert (sc_list.epsilon.shape[0] == nbeta)
-    map_func = map if executor is None else executor.map
-    # p=normal(size=q0.shape)
-    p_list = [np.random.normal(size=q0.shape) for q0 in q0_list]
-    current_k = [kinetic(p) for p in p_list]
-    q_list = q0_list.copy()
+def sample_packed(args):
+    return sample(*args)
 
-    last_hq_q_tmp = [-beta_list[i // n_per_beta] * x
-                     for (i, x) in enumerate(last_grad_list)]
-
-    evolve=EvolveWrapper(p_list, q_list,
-                         last_hq_q_tmp, n_per_beta, grad_logprob,
-                         beta_list, sc_list.epsilon,
-                         l)
-    qphqq_list = list(map_func(evolve, range(0, len(q_list))))
-    q_list = [i[0] for i in qphqq_list]
-    p_list = [i[1] for i in qphqq_list]
-    last_hq_q_tmp = [i[2] for i in qphqq_list]
-    current_u = [-x for x in lp_list]
-
-    proposed_u = [-y for y in map_func(flogprob,
-                          q_list)]
-    proposed_k = [kinetic(p) for p in p_list]
-
-    dh = [(u0 - u1) * beta_list[i // n_per_beta] + k0 - k1
-          for (i, (u0, u1, k0, k1))
-          in enumerate(zip(
-            current_u, proposed_u, current_k, proposed_k))]
-    for i, (dh1, q1, pu, lhqt) in enumerate(
-            zip(
-                dh, q_list, proposed_u, last_hq_q_tmp)):
-        ibeta = i // n_per_beta
-        if np.isfinite(dh1) and np.random.rand() < np.exp(dh1):
-            q0_list[i] = q1
-            lp_list[i] = -pu
-            last_grad_list[i] = -lhqt
-            accept_cnt[ibeta] += 1
-            if np.random.rand() < 1.0 - sc_list.target_accept_ratio:
-                sc_list.epsilon[ibeta] *= (1.0 + sc_list.adj_param)
-        elif np.random.rand() < sc_list.target_accept_ratio:
-            sc_list.epsilon[ibeta] /= (1.0 + sc_list.adj_param)
-    return accept_cnt
-
+def sample_pt_impl(flogprob, grad_logprob, q0_list, lp_list, last_grad_list, beta_list, l, sc: SamplerStatePt, executor=None):
+    fmap=map if executor is None else executor.map
+    nbeta=len(beta_list)
+    n_per_beta=len(q0_list)//nbeta
+    flogprob_beta=[flogprob]*len(q0_list)
+    grad_beta=[grad_logprob]*len(q0_list)
+    sc1=[SamplerState(sc.epsilon[i//n_per_beta], sc.target_accept_ratio, sc.adj_param) for i in range(len(q0_list))]
+    expanded_beta_list=[beta_list[i//n_per_beta] for i in range(len(q0_list))]
+    l_list=[l]*len(q0_list)
+    result=list(fmap(sample_packed, zip(flogprob_beta, grad_beta, q0_list, lp_list, last_grad_list, l_list, sc1, expanded_beta_list)))
+    #q0_proposed, lp_proposed, last_grad_proposed, accepted=[ [ x[i] for x in result] for i in range(4)]
+    for i,(q0, lp, gp, accepted) in enumerate(result):
+        ibeta=i//n_per_beta
+        if accepted:
+            q0_list[i]=q0
+            lp_list[i]=lp
+            last_grad_list[i]=gp
+            if uniform() < 1 - sc.target_accept_ratio:
+                sc.epsilon[ibeta] *= (1.0 + sc.adj_param)
+        else:
+            if uniform() < sc.target_accept_ratio:
+                sc.epsilon[ibeta] /= (1.0 + sc.adj_param)
 
 def rosenbrock(x):
     return -np.sum(100 * (x[1:] - x[:-1] ** 2) ** 2 + (1 - x[:-1]) ** 2)
