@@ -52,6 +52,41 @@ def sample(flogprob, grad_logprob, q0, lp, last_grad, l, sc: SamplerState):
     return (q0, lp, last_grad, accepted)
 
 
+class EvolveWrapper:
+    def __init__(self, p_list,
+                 q_list,last_hq_q_tmp,
+                 n_per_beta,grad_logprob,beta_list, epsilon, l):
+        self.p_list=p_list
+        self.q_list=q_list
+        self.last_hq_q_tmp=last_hq_q_tmp
+        self.n_per_beta=n_per_beta
+        self.grad_logprob=grad_logprob
+        self.l=l
+        self.beta_list=beta_list
+        self.epsilon=epsilon
+
+    def __call__(self, i):
+        p1 = self.p_list[i]
+        q1 = self.q_list[i]
+        hlqq = self.last_hq_q_tmp[i]
+        ibeta = i // self.n_per_beta
+        beta = self.beta_list[ibeta]
+        e = self.epsilon[ibeta]
+
+        def h_p(p):
+            return p
+
+        def h_q(q):
+            return self.grad_logprob(q) * (-beta)
+
+        for j in range(self.l):
+            q1, p1, hlqq = leapfrog(q1,
+                                    p1,
+                                    hlqq,
+                                    e, h_q, h_p)
+        return (q1, p1, hlqq)
+
+
 class SamplerStatePt:
     def __init__(self, epsilon, target_accept_ratio, adj_param, nbeta: int):
         self.epsilon = epsilon * np.ones(nbeta)
@@ -67,18 +102,18 @@ class SamplerStatePt:
     def slow(self):
         self.adj_param=0.001
 
-
 def sample_pt_impl(flogprob, grad_logprob,
                    q0_list, lp_list,
                    last_grad_list, beta_list,
-                   l, sc_list: SamplerStatePt):
+                   l, sc_list: SamplerStatePt,
+                   executor=None):
     nbeta = len(beta_list)
     accept_cnt = [0] * nbeta
     n_per_beta = len(q0_list) // nbeta
     assert (len(q0_list) == len(lp_list))
     assert (len(q0_list) == len(last_grad_list))
     assert (sc_list.epsilon.shape[0] == nbeta)
-
+    map_func = map if executor is None else executor.map
     # p=normal(size=q0.shape)
     p_list = [np.random.normal(size=q0.shape) for q0 in q0_list]
     current_k = [kinetic(p) for p in p_list]
@@ -87,28 +122,18 @@ def sample_pt_impl(flogprob, grad_logprob,
     last_hq_q_tmp = [-beta_list[i // n_per_beta] * x
                      for (i, x) in enumerate(last_grad_list)]
 
-    def evolve(i):
-        p1 = p_list[i]
-        q1 = q_list[i]
-        hlqq = last_hq_q_tmp[i]
-        ibeta = i // n_per_beta
-        beta = beta_list[ibeta]
-        e = sc.epsilon[ibeta]
-        h_p = lambda p: p
-        h_q = lambda q: grad_logprob(q) * (-beta)
-        for j in range(l):
-            q1, p1, hlqq = leapfrog(q1,
-                                    p1,
-                                    hlqq,
-                                    e, h_q, h_p)
-        return (q1, p1, hlqq)
-
-    qphqq_list = list(map(evolve, range(0, len(q_list))))
+    evolve=EvolveWrapper(p_list, q_list,
+                         last_hq_q_tmp, n_per_beta, grad_logprob,
+                         beta_list, sc.epsilon.copy(),
+                         l)
+    qphqq_list = list(map_func(evolve, range(0, len(q_list))))
     q_list = [i[0] for i in qphqq_list]
     p_list = [i[1] for i in qphqq_list]
     last_hq_q_tmp = [i[2] for i in qphqq_list]
     current_u = [-x for x in lp_list]
-    proposed_u = list(map(lambda x: -flogprob(x), q_list))
+
+    proposed_u = [-y for y in map_func(flogprob,
+                          q_list)]
     proposed_k = [kinetic(p) for p in p_list]
 
     dh = [(u0 - u1) * beta_list[i // n_per_beta] + k0 - k1
@@ -158,8 +183,9 @@ def gaussian_g(x):
 
 
 if __name__ == '__main__':
+    from multiprocessing import Pool
     import sys
-
+    pool=Pool()
     x = [np.array([0., 0.])] * 16
     lp = list(map(gaussian, x))
     last_grad = list(map(gaussian_g, x))
@@ -170,7 +196,10 @@ if __name__ == '__main__':
     of = open('a.txt', 'w')
 
     for i in range(0, 100000):
-        ac = sample_pt_impl(gaussian, gaussian_g, x, lp, last_grad, beta_list, 3, sc)
+        ac = sample_pt_impl(gaussian, gaussian_g,
+                            x, lp, last_grad,
+                            beta_list, 3, sc,
+                            executor=pool)
 
         if i % 100==0 and i>10000:
             print(sc.epsilon)
