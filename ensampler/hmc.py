@@ -134,7 +134,7 @@ def sample_pt_impl(flogprob, grad_logprob,
 
     evolve=EvolveWrapper(p_list, q_list,
                          last_hq_q_tmp, n_per_beta, grad_logprob,
-                         beta_list, sc.epsilon.copy(),
+                         beta_list, sc_list.epsilon,
                          l)
     qphqq_list = list(map_func(evolve, range(0, len(q_list))))
     q_list = [i[0] for i in qphqq_list]
