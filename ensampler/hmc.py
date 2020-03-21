@@ -159,10 +159,10 @@ def sample_pt_impl(flogprob, grad_logprob,
             lp_list[i] = -pu
             last_grad_list[i] = -lhqt
             accept_cnt[ibeta] += 1
-            if np.random.rand() < 1.0 - sc.target_accept_ratio:
-                sc.epsilon[ibeta] *= (1.0 + sc.adj_param)
-        elif np.random.rand() < sc.target_accept_ratio:
-            sc.epsilon[ibeta] /= (1.0 + sc.adj_param)
+            if np.random.rand() < 1.0 - sc_list.target_accept_ratio:
+                sc_list.epsilon[ibeta] *= (1.0 + sc_list.adj_param)
+        elif np.random.rand() < sc_list.target_accept_ratio:
+            sc_list.epsilon[ibeta] /= (1.0 + sc_list.adj_param)
     return accept_cnt
 
 
