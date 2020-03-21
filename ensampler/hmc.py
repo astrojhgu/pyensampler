@@ -107,7 +107,7 @@ def sample_pt(flogprob, grad_logprob,
               beta_list, l, sc_list: SamplerStatePt,
               executor = None):
     map_func=map if executor is None else executor.map
-    last_grad = list(map_func(gaussian_g, x))
+    last_grad = list(map_func(gaussian_g, q0_list))
     return sample_pt_impl(flogprob, grad_logprob,
                    q0_list, lp_list, last_grad,
                    beta_list, l, sc_list, executor)
