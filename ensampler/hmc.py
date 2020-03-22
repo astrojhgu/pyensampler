@@ -32,8 +32,8 @@ class HqBeta:
     def __call__(self, q):
         return -self.beta*self.lp_grad(q)
 
-def sample(flogprob, grad_logprob, q0, lp, last_grad, l, sc: SamplerState, beta=1):
-    p = normal(size=q0.shape)
+def sample(flogprob, grad_logprob, q0, lp, last_grad, l, sc: SamplerState, beta=1, p0=None):
+    p = normal(size=q0.shape) if p0 is None else p0
     current_k = kinetic(p)
     q = q0
 
@@ -95,7 +95,8 @@ def sample_pt_impl(flogprob, grad_logprob, q0_list, lp_list, last_grad_list, bet
     sc1=[SamplerState(sc.epsilon[i//n_per_beta], sc.target_accept_ratio, sc.adj_param) for i in range(len(q0_list))]
     expanded_beta_list=[beta_list[i//n_per_beta] for i in range(len(q0_list))]
     l_list=[l]*len(q0_list)
-    result=list(fmap(sample_packed, zip(flogprob_beta, grad_beta, q0_list, lp_list, last_grad_list, l_list, sc1, expanded_beta_list)))
+    p0_list=[normal(size=q0.shape) for q0 in q0_list]
+    result=list(fmap(sample_packed, zip(flogprob_beta, grad_beta, q0_list, lp_list, last_grad_list, l_list, sc1, expanded_beta_list, p0_list)))
     #q0_proposed, lp_proposed, last_grad_proposed, accepted=[ [ x[i] for x in result] for i in range(4)]
     accept_cnt=[0]*nbeta
     for i,(q0, lp, gp, accepted) in enumerate(result):
